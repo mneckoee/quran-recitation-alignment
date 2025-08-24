@@ -98,6 +98,10 @@ class WaveformViewer(QMainWindow):
         self.submit_button.clicked.connect(self.add_markers)
         self.layout.addWidget(self.submit_button)
 
+        self.export_button = QPushButton("Export")
+        self.export_button.clicked.connect(self.export_markers)
+        self.layout.addWidget(self.export_button)
+
         # State
         self.audio = None
         self.samples = None
@@ -363,6 +367,18 @@ class WaveformViewer(QMainWindow):
                     self.stream.stop()
                 return True
         return super().eventFilter(obj, event)
+
+    def export_markers(self):
+        times = [int(m.x) for m in self.markers]
+        
+        array_str = "[" + ", ".join(map(str, times)) + "]"
+        
+        # Copy to clipboard
+        clipboard = QApplication.clipboard()
+        clipboard.setText(array_str)
+        
+        print("Exported:", array_str)
+
 
 # -------------------------
 # Main
