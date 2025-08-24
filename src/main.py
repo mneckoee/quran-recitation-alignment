@@ -42,6 +42,8 @@ class WaveformViewer(QMainWindow):
         self.sample_rate = None
         self._drag_active = False
         self._last_xdata = None
+        self.y_min = None
+        self.y_max = None  # fixed global y-limits
 
     # ---------------------------
     # File loading
@@ -66,6 +68,9 @@ class WaveformViewer(QMainWindow):
             if self.audio.channels == 2:
                 self.samples = self.samples.reshape((-1, 2)).mean(axis=1)
 
+            # Precompute fixed global Y limits
+            self.y_min, self.y_max = float(np.min(self.samples)), float(np.max(self.samples))
+
             # Set initial x-limits to full duration
             duration = len(self.samples) / self.sample_rate
             self.ax.set_xlim(0, duration)
@@ -80,7 +85,7 @@ class WaveformViewer(QMainWindow):
     # Waveform drawing
     # ---------------------------
     def update_waveform(self, title="Waveform"):
-        """Draw waveform with dynamic downsampling."""
+        """Draw waveform with dynamic downsampling, fixed y-axis."""
         if self.samples is None or self.sample_rate is None:
             return
 
@@ -102,7 +107,7 @@ class WaveformViewer(QMainWindow):
         canvas_width = max(1, self.canvas.width())
 
         # Downsample factor
-        samples_per_pixel = visible_samples / (2*canvas_width)
+        samples_per_pixel = visible_samples / (2 * canvas_width)
         step = max(1, int(samples_per_pixel))
 
         # Decimate
@@ -113,6 +118,7 @@ class WaveformViewer(QMainWindow):
         self.ax.clear()
         self.ax.plot(decimated_time, decimated_samples, linewidth=0.8)
         self.ax.set_xlim(x_min, x_max)
+        self.ax.set_ylim(self.y_min, self.y_max)  # FIXED Y RANGE
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Amplitude")
         self.ax.set_title(title)
