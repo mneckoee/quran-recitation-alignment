@@ -3,14 +3,13 @@ import numpy as np
 import sounddevice as sd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, 
-    QFileDialog, QTextEdit, QLabel, QHBoxLayout
+    QFileDialog, QTextEdit, QLabel
 )
 from PyQt5.QtCore import Qt
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.lines import Line2D
-
 from matplotlib.patches import Rectangle
 
 class Marker:
@@ -19,6 +18,7 @@ class Marker:
         self.word = word
         self.x = x
         self.ax = ax
+        self.selected = False
 
         # Vertical line across waveform
         self.line = Line2D([x, x], [y_min, y_max], color='blue', linewidth=1.5)
@@ -31,12 +31,12 @@ class Marker:
 
         self.box = Rectangle(
             (x - box_size, self.box_y),
-            box_size * 2, box_size,  # width, height
+            box_size * 2, box_size,
             facecolor='lightblue', edgecolor='blue'
         )
         ax.add_patch(self.box)
 
-        # Text label inside the box
+        # Text label inside the box (vertical)
         self.label = ax.text(
             x, self.box_y + box_size / 2,
             f"{word}:{index}",
@@ -48,12 +48,20 @@ class Marker:
 
     def update_position(self, x):
         self.x = x
-        # update line
         self.line.set_xdata([x, x])
-        # update box
         self.box.set_x(x - self.box_size)
-        # update label
         self.label.set_x(x)
+
+    def set_selected(self, selected: bool):
+        self.selected = selected
+        if selected:
+            self.line.set_color("green")
+            self.box.set_edgecolor("green")
+            self.box.set_facecolor("lightgreen")
+        else:
+            self.line.set_color("blue")
+            self.box.set_edgecolor("blue")
+            self.box.set_facecolor("lightblue")
 
 
 class WaveformViewer(QMainWindow):
@@ -102,6 +110,7 @@ class WaveformViewer(QMainWindow):
         self._drag_marker = None
         self._drag_active = False
         self._last_xdata = None
+        self.selected_marker = None
 
         # Canvas events
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
@@ -138,8 +147,10 @@ class WaveformViewer(QMainWindow):
         for m in self.markers:
             m.line.remove()
             m.box.remove()
+            m.label.remove()
         self.markers.clear()
         self.transcription.clear()
+        self.selected_marker = None
 
     # -------------------------
     # Update waveform
@@ -213,6 +224,7 @@ class WaveformViewer(QMainWindow):
             if abs(event.xdata - m.x) < 10:
                 self._drag_marker = m
                 m.drag_active = True
+                self.select_marker(m)   # highlight selection
                 return
         self._drag_active = True
         self._last_xdata = event.xdata
@@ -243,6 +255,13 @@ class WaveformViewer(QMainWindow):
             self.update_waveform()
             self._last_xdata = event.xdata
 
+    def select_marker(self, marker: Marker):
+        for m in self.markers:
+            m.set_selected(False)
+        marker.set_selected(True)
+        self.selected_marker = marker
+        self.canvas.draw_idle()
+
     # -------------------------
     # Spacebar play/pause
     # -------------------------
@@ -256,8 +275,13 @@ class WaveformViewer(QMainWindow):
     def start_playback(self):
         if self.stream:
             self.stream.stop()
+        # start from selected marker (ms) if exists
+        if self.selected_marker:
+            start_ms = self.selected_marker.x
+            self.playback_position = int(start_ms/1000 * self.sample_rate)
+        else:
             self.playback_position = 0
-        self.playback_position = 0
+
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate, channels=1, dtype='float32',
             callback=self.sd_callback
@@ -302,6 +326,7 @@ class WaveformViewer(QMainWindow):
             m.box.remove()
             m.label.remove()
         self.markers.clear()
+        self.selected_marker = None
         for i, w in enumerate(words):
             x = spacing * (i+1)
             m = Marker(i+1, w, x, self.y_min, self.y_max, self.ax)
@@ -311,13 +336,13 @@ class WaveformViewer(QMainWindow):
     def eventFilter(self, obj, event):
         if obj == self.transcription and event.type() == event.KeyPress:
             if event.key() == Qt.Key_Space:
-                # Trigger spacebar behavior manually
                 if self.stream is None or not self.stream.active:
                     self.start_playback()
                 else:
                     self.stream.stop()
-                return True  # consume the event
+                return True
         return super().eventFilter(obj, event)
+
 # -------------------------
 # Main
 # -------------------------
