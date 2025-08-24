@@ -1,13 +1,12 @@
 import sys
 import numpy as np
+import sounddevice as sd
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, QFileDialog
 from PyQt5.QtCore import Qt
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-import vlc
 from matplotlib.lines import Line2D
-
 
 class WaveformViewer(QMainWindow):
     def __init__(self):
@@ -15,22 +14,22 @@ class WaveformViewer(QMainWindow):
         self.setWindowTitle("MP3 Waveform Viewer")
         self.setGeometry(100, 100, 800, 600)
 
-        # Main widget and layout
+        # Main widget & layout
         self.main_widget = QWidget(self)
         self.setCentralWidget(self.main_widget)
         self.layout = QVBoxLayout(self.main_widget)
 
-        # Button to load MP3
+        # Load button
         self.load_button = QPushButton("Load MP3 File", self)
         self.load_button.clicked.connect(self.load_mp3)
         self.layout.addWidget(self.load_button)
 
-        # Matplotlib figure and canvas
+        # Matplotlib canvas
         self.figure, self.ax = plt.subplots()
         self.canvas = FigureCanvas(self.figure)
         self.layout.addWidget(self.canvas)
 
-        # Connect events
+        # Events
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
         self.canvas.mpl_connect("button_press_event", self.on_press)
         self.canvas.mpl_connect("button_release_event", self.on_release)
@@ -42,47 +41,41 @@ class WaveformViewer(QMainWindow):
         self.audio = None
         self.samples = None
         self.sample_rate = None
-        self._drag_active = False
-        self._last_xdata = None
         self.y_min = None
         self.y_max = None
         self.line = None
         self.playhead_line = None
 
-        # VLC player
-        self.vlc_player = None
-        self.current_file = None
+        # Drag
+        self._drag_active = False
+        self._last_xdata = None
 
-        # Timer for updating playhead
-        self.timer_id = self.startTimer(300)
+        # Playback
+        self.stream = None
+        self.playback_position = 0
+        self.timer_id = self.startTimer(10)  # 100 FPS
 
     # ---------------------------
-    # File loading
+    # Load MP3
     # ---------------------------
     def load_mp3(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select MP3 File",
-            "",
-            "MP3 Files (*.mp3);;All Files (*)"
+            self, "Select MP3 File", "", "MP3 Files (*.mp3);;All Files (*)"
         )
         if not file_path:
             return
-
         try:
-            # Load MP3 using pydub for waveform
+            # Load audio
             self.audio = AudioSegment.from_mp3(file_path)
-            self.samples = np.array(self.audio.get_array_of_samples())
-            self.sample_rate = self.audio.frame_rate
-
-            # Stereo fix: convert to mono
+            self.samples = np.array(self.audio.get_array_of_samples(), dtype=np.float32)
             if self.audio.channels == 2:
                 self.samples = self.samples.reshape((-1, 2)).mean(axis=1)
+            self.samples /= np.max(np.abs(self.samples))  # normalize
 
-            # Global Y-axis limits
+            self.sample_rate = self.audio.frame_rate
             self.y_min, self.y_max = float(np.min(self.samples)), float(np.max(self.samples))
 
-            # Set X-limits in milliseconds
+            # X-limits in ms
             duration_ms = len(self.samples) / self.sample_rate * 1000
             self.ax.set_xlim(0, duration_ms)
 
@@ -90,34 +83,30 @@ class WaveformViewer(QMainWindow):
             self.update_waveform(title="Waveform of " + file_path.split("/")[-1])
 
             # Reset playhead
-            if self.playhead_line is not None:
+            if self.playhead_line:
                 self.playhead_line.remove()
                 self.playhead_line = None
 
-            # Setup VLC player
-            self.current_file = file_path
-            if self.vlc_player is None:
-                self.vlc_player = vlc.MediaPlayer(file_path)
-            else:
-                self.vlc_player.set_mrl(file_path)
+            # Stop previous playback
+            if self.stream:
+                self.stream.stop()
+                self.stream.close()
+                self.playback_position = 0
 
         except Exception as e:
-            print(f"Error loading MP3 file: {e}")
+            print(f"Error loading MP3: {e}")
 
     # ---------------------------
-    # Waveform drawing
+    # Update waveform
     # ---------------------------
     def update_waveform(self, title="Waveform"):
-        if self.samples is None or self.sample_rate is None:
+        if self.samples is None:
             return
-
-        # X-axis in milliseconds
         x_min, x_max = self.ax.get_xlim()
         total_ms = len(self.samples) / self.sample_rate * 1000
 
         x_min = max(0, x_min)
         x_max = min(total_ms, x_max)
-
         start_idx = int(x_min / 1000 * self.sample_rate)
         end_idx = int(x_max / 1000 * self.sample_rate)
         if end_idx <= start_idx:
@@ -149,14 +138,12 @@ class WaveformViewer(QMainWindow):
     def on_scroll(self, event):
         if self.samples is None:
             return
-
         x_min, x_max = self.ax.get_xlim()
         x_mid = event.xdata if event.xdata is not None else (x_min + x_max) / 2
-
         zoom_in_factor = 0.8
         zoom_out_factor = 1.25
 
-        if hasattr(event, "step") and event.step != 0:  # macOS trackpad
+        if hasattr(event, "step") and event.step != 0:
             scale_factor = zoom_in_factor if event.step > 0 else zoom_out_factor
         else:
             if event.button == "up":
@@ -168,7 +155,6 @@ class WaveformViewer(QMainWindow):
 
         new_x_min = x_mid - (x_mid - x_min) * scale_factor
         new_x_max = x_mid + (x_max - x_mid) * scale_factor
-
         total_ms = len(self.samples) / self.sample_rate * 1000
         new_x_min = max(0, new_x_min)
         new_x_max = min(total_ms, new_x_max)
@@ -177,7 +163,7 @@ class WaveformViewer(QMainWindow):
         self.update_waveform()
 
     # ---------------------------
-    # Pan with drag
+    # Pan drag
     # ---------------------------
     def on_axes_enter(self, event):
         if event.inaxes is self.ax and not self._drag_active:
@@ -222,7 +208,6 @@ class WaveformViewer(QMainWindow):
 
         new_x_min = x_min + dx
         new_x_max = x_max + dx
-
         if new_x_min < 0:
             new_x_min = 0
             new_x_max = x_range
@@ -235,38 +220,53 @@ class WaveformViewer(QMainWindow):
         self._last_xdata = event.xdata
 
     # ---------------------------
-    # Spacebar playback
+    # Spacebar play/pause
     # ---------------------------
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Space and self.vlc_player and self.current_file:
-            state = self.vlc_player.get_state()
-            if state in [vlc.State.Playing, vlc.State.Buffering]:
-                self.vlc_player.pause()
+        if event.key() == Qt.Key_Space and self.samples is not None:
+            if self.stream is None or not self.stream.active:
+                self.start_playback()
             else:
-                self.vlc_player.play()
+                self.stream.stop()
+
+    # ---------------------------
+    # SoundDevice playback
+    # ---------------------------
+    def start_playback(self):
+        if self.stream:
+            self.stream.stop()
+            self.playback_position = 0
+
+        self.playback_position = 0
+        self.stream = sd.OutputStream(
+            samplerate=self.sample_rate,
+            channels=1,
+            dtype='float32',
+            callback=self.sd_callback
+        )
+        self.stream.start()
+
+    def sd_callback(self, outdata, frames, time, status):
+        end = min(self.playback_position + frames, len(self.samples))
+        outdata[:end - self.playback_position, 0] = self.samples[self.playback_position:end]
+        if end - self.playback_position < frames:
+            outdata[end - self.playback_position:] = 0
+        self.playback_position = end
+        if self.playback_position >= len(self.samples):
+            raise sd.CallbackStop()
 
     # ---------------------------
     # Timer for red playhead
     # ---------------------------
     def timerEvent(self, event):
-        if self.vlc_player and self.current_file:
-            current_ms = self.vlc_player.get_time()
-            if current_ms >= 0:
-                x_min, x_max = self.ax.get_xlim()
-                if x_min <= current_ms <= x_max:
-                    if self.playhead_line is None:
-                        self.playhead_line = Line2D([current_ms, current_ms],
-                                                    [self.y_min, self.y_max],
-                                                    color='red', linewidth=1.0)
-                        self.ax.add_line(self.playhead_line)
-                    else:
-                        self.playhead_line.set_xdata([current_ms, current_ms])
-                    self.canvas.draw_idle()
-                else:
-                    # If out of view, just move line without drawing to avoid flicker
-                    if self.playhead_line:
-                        self.playhead_line.set_xdata([current_ms, current_ms])
-                        self.canvas.draw_idle()
+        if self.stream and self.stream.active:
+            current_ms = self.playback_position / self.sample_rate * 1000
+            if self.playhead_line:
+                self.playhead_line.set_xdata([current_ms, current_ms])
+            else:
+                self.playhead_line = Line2D([current_ms, current_ms], [self.y_min, self.y_max], color='red')
+                self.ax.add_line(self.playhead_line)
+            self.canvas.draw_idle()
 
 
 # ---------------------------
