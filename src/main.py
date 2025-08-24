@@ -11,24 +11,50 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.lines import Line2D
 
+from matplotlib.patches import Rectangle
+
 class Marker:
-    def __init__(self, index, x, y_min, y_max, ax):
+    def __init__(self, index, word, x, y_min, y_max, ax):
         self.index = index
+        self.word = word
         self.x = x
         self.ax = ax
-        # Vertical line
-        self.line = Line2D([x, x], [y_min, y_max*0.1], color='blue', linewidth=1.5)
+
+        # Vertical line across waveform
+        self.line = Line2D([x, x], [y_min, y_max], color='blue', linewidth=1.5)
         ax.add_line(self.line)
-        # Box for grabbing
-        self.box_height = y_max*0.05
-        self.box = Line2D([x-5, x+5], [0, 0], color='blue', marker='s', markersize=10, markerfacecolor='lightblue')
-        ax.add_line(self.box)
+
+        # Box for grabbing (below waveform)
+        box_size = (y_max - y_min) * 0.05
+        self.box_y = y_min - box_size * 2   # place a bit lower
+        self.box_size = box_size
+
+        self.box = Rectangle(
+            (x - box_size, self.box_y),
+            box_size * 2, box_size,  # width, height
+            facecolor='lightblue', edgecolor='blue'
+        )
+        ax.add_patch(self.box)
+
+        # Text label inside the box
+        self.label = ax.text(
+            x, self.box_y + box_size / 2,
+            f"{word}:{index}",
+            ha="center", va="center",
+            fontsize=8, color="black", rotation=90
+        )
+
         self.drag_active = False
 
     def update_position(self, x):
         self.x = x
+        # update line
         self.line.set_xdata([x, x])
-        self.box.set_xdata([x-5, x+5])
+        # update box
+        self.box.set_x(x - self.box_size)
+        # update label
+        self.label.set_x(x)
+
 
 class WaveformViewer(QMainWindow):
     def __init__(self):
@@ -269,15 +295,16 @@ class WaveformViewer(QMainWindow):
             return
         words = text.split()
         total_ms = len(self.samples)/self.sample_rate*1000
-        spacing = total_ms / max(len(words),1)
+        spacing = total_ms / max(len(words), 1)
         # Remove previous markers
         for m in self.markers:
             m.line.remove()
             m.box.remove()
+            m.label.remove()
         self.markers.clear()
-        for i, _ in enumerate(words):
-            x = spacing*(i+1)
-            m = Marker(i+1, x, self.y_min, self.y_max, self.ax)
+        for i, w in enumerate(words):
+            x = spacing * (i+1)
+            m = Marker(i+1, w, x, self.y_min, self.y_max, self.ax)
             self.markers.append(m)
         self.canvas.draw_idle()
 
