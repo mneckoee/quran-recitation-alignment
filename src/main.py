@@ -272,6 +272,23 @@ class WaveformViewer(QMainWindow):
             else:
                 self.stream.stop()
 
+        if self.selected_marker is not None:
+            xmin, xmax = self.ax.get_xlim()
+            step = (xmax - xmin) * 0.01  # adjust fraction as needed
+
+            newx_x = self.selected_marker.x
+            if event.key() == Qt.Key_Left:
+                newx_x -= step
+            elif event.key() == Qt.Key_Right:
+                newx_x += step
+
+            # update marker position
+            self.selected_marker.update_position(newx_x)
+            self.canvas.draw_idle()
+        else:
+            # no marker selected, fall back to other shortcuts (like play/pause on space)
+            super().keyPressEvent(event)
+
     def start_playback(self):
         if self.stream:
             self.stream.stop()
@@ -317,6 +334,10 @@ class WaveformViewer(QMainWindow):
         text = self.transcription.toPlainText().strip()
         if not text or self.samples is None:
             return
+        
+        # disable after submit
+        self.transcription.setDisabled(True)
+
         words = text.split()
         total_ms = len(self.samples)/self.sample_rate*1000
         spacing = total_ms / max(len(words), 1)
