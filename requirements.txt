@@ -1,0 +1,4 @@
+PyQt5>=5.15.6 
+pydub>=0.25.1 
+numpy>=1.21.0 
+matplotlib>=3.5.0
