@@ -6,6 +6,7 @@ from pydub import AudioSegment
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import vlc
+from matplotlib.lines import Line2D
 
 
 class WaveformViewer(QMainWindow):
@@ -44,10 +45,17 @@ class WaveformViewer(QMainWindow):
         self._drag_active = False
         self._last_xdata = None
         self.y_min = None
-        self.y_max = None  # fixed global y-limits
-        self.line = None 
+        self.y_max = None
+        self.line = None
+        self.playhead_line = None
+
+        # VLC player
         self.vlc_player = None
         self.current_file = None
+
+        # Timer for updating playhead
+        self.timer_id = self.startTimer(300)
+
     # ---------------------------
     # File loading
     # ---------------------------
@@ -62,12 +70,7 @@ class WaveformViewer(QMainWindow):
             return
 
         try:
-            self.current_file = file_path
-            if self.vlc_player is None:
-                self.vlc_player = vlc.MediaPlayer(file_path)
-            else:
-                self.vlc_player.set_mrl(file_path)
-            # Load MP3
+            # Load MP3 using pydub for waveform
             self.audio = AudioSegment.from_mp3(file_path)
             self.samples = np.array(self.audio.get_array_of_samples())
             self.sample_rate = self.audio.frame_rate
@@ -76,15 +79,27 @@ class WaveformViewer(QMainWindow):
             if self.audio.channels == 2:
                 self.samples = self.samples.reshape((-1, 2)).mean(axis=1)
 
-            # Precompute fixed global Y limits
+            # Global Y-axis limits
             self.y_min, self.y_max = float(np.min(self.samples)), float(np.max(self.samples))
 
-            # Set initial x-limits to full duration
-            duration = len(self.samples) / self.sample_rate
-            self.ax.set_xlim(0, duration)
+            # Set X-limits in milliseconds
+            duration_ms = len(self.samples) / self.sample_rate * 1000
+            self.ax.set_xlim(0, duration_ms)
 
             # Draw waveform
             self.update_waveform(title="Waveform of " + file_path.split("/")[-1])
+
+            # Reset playhead
+            if self.playhead_line is not None:
+                self.playhead_line.remove()
+                self.playhead_line = None
+
+            # Setup VLC player
+            self.current_file = file_path
+            if self.vlc_player is None:
+                self.vlc_player = vlc.MediaPlayer(file_path)
+            else:
+                self.vlc_player.set_mrl(file_path)
 
         except Exception as e:
             print(f"Error loading MP3 file: {e}")
@@ -93,51 +108,40 @@ class WaveformViewer(QMainWindow):
     # Waveform drawing
     # ---------------------------
     def update_waveform(self, title="Waveform"):
-        """Draw waveform with dynamic downsampling using Line2D (no flicker)."""
         if self.samples is None or self.sample_rate is None:
             return
 
-        # Visible x-range
+        # X-axis in milliseconds
         x_min, x_max = self.ax.get_xlim()
-        total_duration = len(self.samples) / self.sample_rate
+        total_ms = len(self.samples) / self.sample_rate * 1000
 
-        # Clamp
         x_min = max(0, x_min)
-        x_max = min(total_duration, x_max)
+        x_max = min(total_ms, x_max)
 
-        # Convert to sample indices
-        start_idx = int(x_min * self.sample_rate)
-        end_idx = int(x_max * self.sample_rate)
+        start_idx = int(x_min / 1000 * self.sample_rate)
+        end_idx = int(x_max / 1000 * self.sample_rate)
         if end_idx <= start_idx:
             return
 
         visible_samples = end_idx - start_idx
         canvas_width = max(1, self.canvas.width())
+        step = max(1, int(visible_samples / (2 * canvas_width)))
 
-        # Downsample factor
-        samples_per_pixel = visible_samples / (2 * canvas_width)
-        step = max(1, int(samples_per_pixel))
-
-        # Decimate
         decimated_samples = self.samples[start_idx:end_idx:step]
         decimated_time = np.linspace(x_min, x_max, num=len(decimated_samples))
 
         if self.line is None:
-            # First time: create line
             self.line, = self.ax.plot(decimated_time, decimated_samples, linewidth=0.8)
             self.ax.set_xlim(x_min, x_max)
             self.ax.set_ylim(self.y_min, self.y_max)
-            self.ax.set_xlabel("Time (s)")
+            self.ax.set_xlabel("Time (ms)")
             self.ax.set_ylabel("Amplitude")
             self.ax.set_title(title)
         else:
-            # Update existing line for smooth motion
             self.line.set_data(decimated_time, decimated_samples)
             self.ax.set_xlim(x_min, x_max)
-            # Y-limits stay fixed
 
         self.canvas.draw_idle()
-
 
     # ---------------------------
     # Scroll zoom
@@ -147,7 +151,6 @@ class WaveformViewer(QMainWindow):
             return
 
         x_min, x_max = self.ax.get_xlim()
-        x_range = x_max - x_min
         x_mid = event.xdata if event.xdata is not None else (x_min + x_max) / 2
 
         zoom_in_factor = 0.8
@@ -155,7 +158,7 @@ class WaveformViewer(QMainWindow):
 
         if hasattr(event, "step") and event.step != 0:  # macOS trackpad
             scale_factor = zoom_in_factor if event.step > 0 else zoom_out_factor
-        else:  # mouse wheel
+        else:
             if event.button == "up":
                 scale_factor = zoom_in_factor
             elif event.button == "down":
@@ -166,12 +169,9 @@ class WaveformViewer(QMainWindow):
         new_x_min = x_mid - (x_mid - x_min) * scale_factor
         new_x_max = x_mid + (x_max - x_mid) * scale_factor
 
-        # Clamp
-        total_duration = len(self.samples) / self.sample_rate
-        if new_x_min < 0:
-            new_x_min = 0
-        if new_x_max > total_duration:
-            new_x_max = total_duration
+        total_ms = len(self.samples) / self.sample_rate * 1000
+        new_x_min = max(0, new_x_min)
+        new_x_max = min(total_ms, new_x_max)
 
         self.ax.set_xlim(new_x_min, new_x_max)
         self.update_waveform()
@@ -212,10 +212,10 @@ class WaveformViewer(QMainWindow):
         dx = self._last_xdata - event.xdata
         x_min, x_max = self.ax.get_xlim()
         x_range = x_max - x_min
-        total_duration = len(self.samples) / self.sample_rate
+        total_ms = len(self.samples) / self.sample_rate * 1000
 
-        if x_range >= total_duration:
-            self.ax.set_xlim(0, total_duration)
+        if x_range >= total_ms:
+            self.ax.set_xlim(0, total_ms)
             self.update_waveform()
             self._last_xdata = event.xdata
             return
@@ -226,28 +226,47 @@ class WaveformViewer(QMainWindow):
         if new_x_min < 0:
             new_x_min = 0
             new_x_max = x_range
-        if new_x_max > total_duration:
-            new_x_max = total_duration
-            new_x_min = total_duration - x_range
+        if new_x_max > total_ms:
+            new_x_max = total_ms
+            new_x_min = total_ms - x_range
 
         self.ax.set_xlim(new_x_min, new_x_max)
         self.update_waveform()
         self._last_xdata = event.xdata
 
+    # ---------------------------
+    # Spacebar playback
+    # ---------------------------
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Space:
-            self.toggle_playback()
+        if event.key() == Qt.Key_Space and self.vlc_player and self.current_file:
+            state = self.vlc_player.get_state()
+            if state in [vlc.State.Playing, vlc.State.Buffering]:
+                self.vlc_player.pause()
+            else:
+                self.vlc_player.play()
 
-    def toggle_playback(self):
-        if self.vlc_player is None or self.current_file is None:
-            return
-
-        state = self.vlc_player.get_state()
-        if state in [vlc.State.Playing, vlc.State.Buffering]:
-            self.vlc_player.pause()
-        else:
-            self.vlc_player.play()
-
+    # ---------------------------
+    # Timer for red playhead
+    # ---------------------------
+    def timerEvent(self, event):
+        if self.vlc_player and self.current_file:
+            current_ms = self.vlc_player.get_time()
+            if current_ms >= 0:
+                x_min, x_max = self.ax.get_xlim()
+                if x_min <= current_ms <= x_max:
+                    if self.playhead_line is None:
+                        self.playhead_line = Line2D([current_ms, current_ms],
+                                                    [self.y_min, self.y_max],
+                                                    color='red', linewidth=1.0)
+                        self.ax.add_line(self.playhead_line)
+                    else:
+                        self.playhead_line.set_xdata([current_ms, current_ms])
+                    self.canvas.draw_idle()
+                else:
+                    # If out of view, just move line without drawing to avoid flicker
+                    if self.playhead_line:
+                        self.playhead_line.set_xdata([current_ms, current_ms])
+                        self.canvas.draw_idle()
 
 
 # ---------------------------
