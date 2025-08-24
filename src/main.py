@@ -1,7 +1,7 @@
 import sys
 import numpy as np
 import sounddevice as sd
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, QFileDialog
+from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, QFileDialog, QTextEdit, QLabel
 from PyQt5.QtCore import Qt
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
@@ -11,8 +11,8 @@ from matplotlib.lines import Line2D
 class WaveformViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MP3 Waveform Viewer")
-        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle("MP3 Waveform Viewer (SoundDevice + Transcription)")
+        self.setGeometry(100, 100, 800, 700)  # taller for text
 
         # Main widget & layout
         self.main_widget = QWidget(self)
@@ -28,6 +28,15 @@ class WaveformViewer(QMainWindow):
         self.figure, self.ax = plt.subplots()
         self.canvas = FigureCanvas(self.figure)
         self.layout.addWidget(self.canvas)
+
+        # Transcription label
+        self.trans_label = QLabel("Transcription:")
+        self.layout.addWidget(self.trans_label)
+
+        # Transcription text field
+        self.transcription = QTextEdit()
+        self.transcription.setPlaceholderText("Type or paste the transcription here...")
+        self.layout.addWidget(self.transcription)
 
         # Events
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
@@ -92,6 +101,9 @@ class WaveformViewer(QMainWindow):
                 self.stream.stop()
                 self.stream.close()
                 self.playback_position = 0
+
+            # Clear transcription
+            self.transcription.clear()
 
         except Exception as e:
             print(f"Error loading MP3: {e}")
