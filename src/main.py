@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-
+from PyQt5.QtGui import QCursor
 
 class WaveformViewer(QMainWindow):
     def __init__(self):
@@ -35,6 +35,14 @@ class WaveformViewer(QMainWindow):
         self.audio = None
         self.samples = None
         self.sample_rate = None
+        self.canvas.mpl_connect("button_press_event", self.on_press)
+        self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.canvas.mpl_connect("motion_notify_event", self.on_motion)
+        self.canvas.mpl_connect("axes_enter_event", self.on_axes_enter)
+        self.canvas.mpl_connect("axes_leave_event", self.on_axes_leave)
+
+        self._drag_active = False
+        self._last_xdata = None
 
     def load_mp3(self):
         # Open file dialog to select MP3 file
@@ -148,6 +156,71 @@ class WaveformViewer(QMainWindow):
 
         self.ax.set_xlim(new_x_min, new_x_max)
         self.canvas.draw_idle()
+    def on_axes_enter(self, event):
+        if event.inaxes is self.ax and not self._drag_active:
+            self.canvas.setCursor(Qt.OpenHandCursor)
+
+    def on_axes_leave(self, event):
+        if not self._drag_active:
+            self.canvas.setCursor(Qt.ArrowCursor)
+
+    def on_press(self, event):
+        """Start panning with left click inside the axes."""
+        if event.inaxes is not self.ax or event.button != 1 or self.samples is None:
+            return
+        if event.xdata is None:
+            return
+        self._drag_active = True
+        self._last_xdata = event.xdata
+        self.canvas.setCursor(Qt.ClosedHandCursor)
+
+    def on_release(self, event):
+        """Stop panning."""
+        if event.button != 1:
+            return
+        self._drag_active = False
+        self._last_xdata = None
+        # If still over axes, show open hand, else arrow
+        self.canvas.setCursor(Qt.OpenHandCursor if event.inaxes is self.ax else Qt.ArrowCursor)
+
+    def on_motion(self, event):
+        """Pan left/right while dragging (x-axis only)."""
+        if not self._drag_active or self.samples is None:
+            return
+        if event.inaxes is not self.ax or event.xdata is None or self._last_xdata is None:
+            return
+
+        # How far the mouse moved in data coords
+        dx = self._last_xdata - event.xdata   # positive when dragging right
+
+        x_min, x_max = self.ax.get_xlim()
+        x_range = x_max - x_min
+        if self.sample_rate is None or self.sample_rate == 0:
+            return
+        total_duration = len(self.samples) / float(self.sample_rate)
+
+        # If the current view is wider than the content, pin to [0, total_duration]
+        if x_range >= total_duration:
+            self.ax.set_xlim(0, total_duration)
+            self.canvas.draw_idle()
+            self._last_xdata = event.xdata
+            return
+
+        # Shift and clamp
+        new_x_min = x_min + dx
+        new_x_max = x_max + dx
+        if new_x_min < 0:
+            new_x_min = 0
+            new_x_max = x_range
+        if new_x_max > total_duration:
+            new_x_max = total_duration
+            new_x_min = total_duration - x_range
+
+        self.ax.set_xlim(new_x_min, new_x_max)
+        self.canvas.draw_idle()
+
+        # Update for incremental motion
+        self._last_xdata = event.xdata
 
 
 def main():
