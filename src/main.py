@@ -5,6 +5,7 @@ from PyQt5.QtCore import Qt
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import vlc
 
 
 class WaveformViewer(QMainWindow):
@@ -45,7 +46,8 @@ class WaveformViewer(QMainWindow):
         self.y_min = None
         self.y_max = None  # fixed global y-limits
         self.line = None 
-
+        self.vlc_player = None
+        self.current_file = None
     # ---------------------------
     # File loading
     # ---------------------------
@@ -60,6 +62,11 @@ class WaveformViewer(QMainWindow):
             return
 
         try:
+            self.current_file = file_path
+            if self.vlc_player is None:
+                self.vlc_player = vlc.MediaPlayer(file_path)
+            else:
+                self.vlc_player.set_mrl(file_path)
             # Load MP3
             self.audio = AudioSegment.from_mp3(file_path)
             self.samples = np.array(self.audio.get_array_of_samples())
@@ -226,6 +233,21 @@ class WaveformViewer(QMainWindow):
         self.ax.set_xlim(new_x_min, new_x_max)
         self.update_waveform()
         self._last_xdata = event.xdata
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Space:
+            self.toggle_playback()
+
+    def toggle_playback(self):
+        if self.vlc_player is None or self.current_file is None:
+            return
+
+        state = self.vlc_player.get_state()
+        if state in [vlc.State.Playing, vlc.State.Buffering]:
+            self.vlc_player.pause()
+        else:
+            self.vlc_player.play()
+
 
 
 # ---------------------------
