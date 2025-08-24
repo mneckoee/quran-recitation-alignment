@@ -44,6 +44,7 @@ class WaveformViewer(QMainWindow):
         self._last_xdata = None
         self.y_min = None
         self.y_max = None  # fixed global y-limits
+        self.line = None 
 
     # ---------------------------
     # File loading
@@ -85,7 +86,7 @@ class WaveformViewer(QMainWindow):
     # Waveform drawing
     # ---------------------------
     def update_waveform(self, title="Waveform"):
-        """Draw waveform with dynamic downsampling, fixed y-axis."""
+        """Draw waveform with dynamic downsampling using Line2D (no flicker)."""
         if self.samples is None or self.sample_rate is None:
             return
 
@@ -114,16 +115,22 @@ class WaveformViewer(QMainWindow):
         decimated_samples = self.samples[start_idx:end_idx:step]
         decimated_time = np.linspace(x_min, x_max, num=len(decimated_samples))
 
-        # Clear and redraw
-        self.ax.clear()
-        self.ax.plot(decimated_time, decimated_samples, linewidth=0.8)
-        self.ax.set_xlim(x_min, x_max)
-        self.ax.set_ylim(self.y_min, self.y_max)  # FIXED Y RANGE
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Amplitude")
-        self.ax.set_title(title)
+        if self.line is None:
+            # First time: create line
+            self.line, = self.ax.plot(decimated_time, decimated_samples, linewidth=0.8)
+            self.ax.set_xlim(x_min, x_max)
+            self.ax.set_ylim(self.y_min, self.y_max)
+            self.ax.set_xlabel("Time (s)")
+            self.ax.set_ylabel("Amplitude")
+            self.ax.set_title(title)
+        else:
+            # Update existing line for smooth motion
+            self.line.set_data(decimated_time, decimated_samples)
+            self.ax.set_xlim(x_min, x_max)
+            # Y-limits stay fixed
 
         self.canvas.draw_idle()
+
 
     # ---------------------------
     # Scroll zoom
