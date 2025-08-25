@@ -127,6 +127,8 @@ class WaveformViewer(QMainWindow):
         self.playback_position = 0
         self.timer_id = self.startTimer(10)
 
+        self.current_word_label = None 
+
     # -------------------------
     # Load audio
     # -------------------------
@@ -324,11 +326,34 @@ class WaveformViewer(QMainWindow):
     def timerEvent(self, event):
         if self.stream and self.stream.active:
             current_ms = self.playback_position/self.sample_rate*1000
+            
+            # Update playhead line
             if self.playhead_line:
                 self.playhead_line.set_xdata([current_ms, current_ms])
             else:
                 self.playhead_line = Line2D([current_ms, current_ms],[self.y_min,self.y_max],color='red')
                 self.ax.add_line(self.playhead_line)
+
+            # --- Find first marker left of playhead ---
+            left_markers = [m for m in self.markers if m.x <= current_ms]
+            if left_markers:
+                nearest = max(left_markers, key=lambda m: m.x)  # closest marker on left
+                word = nearest.word
+
+                # Show word in center of waveform
+                if self.current_word_label is None:
+                    self.current_word_label = self.ax.text(
+                        0.5, 0.9, word, transform=self.ax.transAxes,
+                        ha="center", va="center", fontsize=14,
+                        color="darkred", fontweight="bold", bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
+                    )
+                else:
+                    self.current_word_label.set_text(word)
+            else:
+                # If no marker yet, clear the text
+                if self.current_word_label:
+                    self.current_word_label.set_text("")
+
             self.canvas.draw_idle()
 
     # -------------------------
