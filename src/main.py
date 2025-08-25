@@ -8,9 +8,12 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from pydub import AudioSegment
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
+import arabic_reshaper
+from bidi.algorithm import get_display
 
 class Marker:
     def __init__(self, index, word, x, y_min, y_max, ax):
@@ -37,9 +40,10 @@ class Marker:
         ax.add_patch(self.box)
 
         # Text label inside the box (vertical)
+        bidi_text = persian_text(word)
         self.label = ax.text(
             x, self.box_y + box_size / 2,
-            f"{word}:{index}",
+            f"{bidi_text}:{index}",
             ha="center", va="center",
             fontsize=8, color="black", rotation=90
         )
@@ -128,7 +132,7 @@ class WaveformViewer(QMainWindow):
         self.timer_id = self.startTimer(10)
 
         self.current_word_label = None 
-
+        self.vazir_font = fm.FontProperties(fname="fonts/vazir_medium.ttf")
     # -------------------------
     # Load audio
     # -------------------------
@@ -339,16 +343,18 @@ class WaveformViewer(QMainWindow):
             if left_markers:
                 nearest = max(left_markers, key=lambda m: m.x)  # closest marker on left
                 word = nearest.word
+                bidi_word = persian_text(word)
 
                 # Show word in center of waveform
                 if self.current_word_label is None:
                     self.current_word_label = self.ax.text(
-                        0.5, 0.9, word, transform=self.ax.transAxes,
+                        0.5, 0.9, bidi_word, transform=self.ax.transAxes,
                         ha="center", va="center", fontsize=14,
+                        fontproperties=self.vazir_font,
                         color="darkred", fontweight="bold", bbox=dict(facecolor="white", alpha=0.6, edgecolor="none")
                     )
                 else:
-                    self.current_word_label.set_text(word)
+                    self.current_word_label.set_text(bidi_word)
             else:
                 # If no marker yet, clear the text
                 if self.current_word_label:
@@ -378,7 +384,7 @@ class WaveformViewer(QMainWindow):
         self.markers.clear()
         self.selected_marker = None
         for i, w in enumerate(words):
-            x = spacing * (i+1)
+            x = spacing * (i+1) - 10
             m = Marker(i+1, w, x, self.y_min, self.y_max, self.ax)
             self.markers.append(m)
         self.canvas.draw_idle()
@@ -404,6 +410,10 @@ class WaveformViewer(QMainWindow):
         
         print("Exported:", array_str)
 
+def persian_text(word: str):
+        """Convert plain Persian text to shaped RTL text"""
+        reshaped = arabic_reshaper.reshape(word)  # connect letters
+        return get_display(reshaped)              # make RTL
 
 # -------------------------
 # Main
