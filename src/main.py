@@ -3,7 +3,7 @@ import numpy as np
 import sounddevice as sd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QFileDialog, QTextEdit, QLabel, QHBoxLayout, QFrame, QSizePolicy
+    QFileDialog, QTextEdit, QLabel, QHBoxLayout, QFrame, QSizePolicy, QCheckBox
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
@@ -190,6 +190,14 @@ class WaveformViewer(QMainWindow):
         """)
         self.submit_button.clicked.connect(self.add_markers)
         self.input_container.addWidget(self.submit_button)
+        
+        # Checkbox for manual markers
+        self.add_markers_checkbox = QCheckBox("Add markers on 'M' keypress")
+        self.add_markers_checkbox.setStyleSheet("QCheckBox { color: #e0e0e0; }")
+        self.add_markers_checkbox.setChecked(False)
+        self.add_markers_checkbox.stateChanged.connect(self.toggle_add_markers_mode)
+        self.input_container.addWidget(self.add_markers_checkbox)
+        
         self.transcription_layout.addLayout(self.input_container)
         self.layout.addWidget(self.transcription_frame)
 
@@ -223,6 +231,8 @@ class WaveformViewer(QMainWindow):
         self._drag_active = False
         self._last_xdata = None
         self.selected_marker = None
+        self.add_markers_on_keypress = False  # New state variable
+        self.next_marker_index = 0 # New state variable
 
         # Canvas events
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
@@ -270,6 +280,7 @@ class WaveformViewer(QMainWindow):
         self.transcription.clear()
         self.transcription.setDisabled(False)
         self.submit_button.setDisabled(False)
+        self.add_markers_checkbox.setDisabled(False)
         self.update_playback_ui()
 
     def clear_markers(self):
@@ -283,6 +294,19 @@ class WaveformViewer(QMainWindow):
             self.playhead_line.remove()
             self.playhead_line = None
         self.canvas.draw_idle()
+        self.next_marker_index = 0 # Reset marker index
+
+    # New method to toggle marker mode
+    def toggle_add_markers_mode(self, state):
+        self.add_markers_on_keypress = (state == Qt.Checked)
+        if self.add_markers_on_keypress:
+            self.submit_button.setDisabled(True)
+            self.transcription.setDisabled(False)
+            self.clear_markers()
+            self.next_marker_index = 0
+        else:
+            self.submit_button.setDisabled(False)
+            self.transcription.setDisabled(False)
 
     # -------------------------
     # Update waveform
@@ -390,11 +414,24 @@ class WaveformViewer(QMainWindow):
         if self.samples is None:
             return
         self.stop_playback()
-        if self.selected_marker:
-            start_ms = self.selected_marker.x
-            self.playback_position = int(start_ms / 1000 * self.sample_rate)
+        
+        start_ms = 0
+        if self.add_markers_on_keypress:
+            if self.selected_marker:
+                start_ms = self.selected_marker.x
+            elif self.markers:
+                # Start from the last placed marker if none are selected
+                start_ms = self.markers[-1].x
+            else:
+                start_ms = 0
         else:
-            self.playback_position = 0
+            if self.selected_marker:
+                start_ms = self.selected_marker.x
+            else:
+                start_ms = 0
+
+        self.playback_position = int(start_ms / 1000 * self.sample_rate)
+        
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate, channels=1, dtype='float32',
             callback=self.sd_callback, finished_callback=self.playback_finished
@@ -482,16 +519,19 @@ class WaveformViewer(QMainWindow):
         
         self.clear_markers()
         
-        total_ms = len(self.samples) / self.sample_rate * 1000
-        spacing = total_ms / (len(words) + 1)
-        for i, w in enumerate(words):
-            x = spacing * (i + 1)
-            m = Marker(i + 1, w, x, self.y_min, self.y_max, self.ax)
-            self.markers.append(m)
-
-        self.canvas.draw_idle()
         self.transcription.setDisabled(True)
         self.submit_button.setDisabled(True)
+
+        if not self.add_markers_on_keypress:
+            total_ms = len(self.samples) / self.sample_rate * 1000
+            spacing = total_ms / (len(words) + 1)
+            for i, w in enumerate(words):
+                x = spacing * (i + 1)
+                m = Marker(i + 1, w, x, self.y_min, self.y_max, self.ax)
+                self.markers.append(m)
+
+            self.canvas.draw_idle()
+        
 
     def handle_transcription_change(self):
         self.transcription.setDisabled(False)
@@ -499,12 +539,42 @@ class WaveformViewer(QMainWindow):
         self.clear_markers()
 
     # -------------------------
-    # Spacebar play/pause
+    # Key press events
     # -------------------------
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Space:
             self.toggle_playback()
             return
+        
+        # New: Manual marker placement
+        if self.add_markers_on_keypress and event.key() == Qt.Key_M:
+            if not self.stream or not self.stream.active:
+                print("Cannot add marker, playback is paused. Press space to play first.")
+                return
+
+            current_ms = self.playback_position / self.sample_rate * 1000
+            words = self.transcription.toPlainText().strip().split()
+
+            if self.next_marker_index < len(words):
+                word = words[self.next_marker_index]
+                if self.next_marker_index < len(self.markers):
+                    # Update existing marker
+                    m = self.markers[self.next_marker_index]
+                    m.update_position(current_ms)
+                    self.select_marker(m)
+                else:
+                    # Add new marker
+                    m = Marker(self.next_marker_index + 1, word, current_ms, self.y_min, self.y_max, self.ax)
+                    self.markers.append(m)
+                    self.select_marker(m)
+                
+                self.next_marker_index += 1
+                self.canvas.draw_idle()
+            else:
+                print("No more words to mark. Add more to transcription.")
+            return
+
+        # Rest of the keypress logic
         if self.selected_marker is not None:
             xmin, xmax = self.ax.get_xlim()
             step = (xmax - xmin) * 0.01  # adjust fraction as needed
@@ -521,6 +591,7 @@ class WaveformViewer(QMainWindow):
         else:
             # no marker selected, fall back to other shortcuts (like play/pause on space)
             super().keyPressEvent(event)
+    
     def eventFilter(self, obj, event):
         if obj == self.transcription and event.type() == event.KeyPress:
             if event.key() == Qt.Key_Space:
