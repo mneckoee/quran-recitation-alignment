@@ -231,8 +231,9 @@ class WaveformViewer(QMainWindow):
         self._drag_active = False
         self._last_xdata = None
         self.selected_marker = None
-        self.add_markers_on_keypress = False  # New state variable
-        self.next_marker_index = 0 # New state variable
+        self.add_markers_on_keypress = False 
+        self.next_marker_index = 0
+        self.playback_speed = 1.0 
 
         # Canvas events
         self.canvas.mpl_connect("scroll_event", self.on_scroll)
@@ -298,15 +299,12 @@ class WaveformViewer(QMainWindow):
 
     # New method to toggle marker mode
     def toggle_add_markers_mode(self, state):
+        self.playback_speed = 0.8 if self.add_markers_on_keypress else 1.0
         self.add_markers_on_keypress = (state == Qt.Checked)
         if self.add_markers_on_keypress:
-            self.submit_button.setDisabled(True)
-            self.transcription.setDisabled(False)
             self.clear_markers()
             self.next_marker_index = 0
-        else:
-            self.submit_button.setDisabled(False)
-            self.transcription.setDisabled(False)
+        
 
     # -------------------------
     # Update waveform
@@ -433,7 +431,7 @@ class WaveformViewer(QMainWindow):
         self.playback_position = int(start_ms / 1000 * self.sample_rate)
         
         self.stream = sd.OutputStream(
-            samplerate=self.sample_rate, channels=1, dtype='float32',
+            samplerate=int(self.sample_rate * self.playback_speed), channels=1, dtype='float32',
             callback=self.sd_callback, finished_callback=self.playback_finished
         )
         self.stream.start()
