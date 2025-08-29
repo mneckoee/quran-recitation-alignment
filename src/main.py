@@ -299,8 +299,8 @@ class WaveformViewer(QMainWindow):
 
     # New method to toggle marker mode
     def toggle_add_markers_mode(self, state):
-        self.playback_speed = 0.8 if self.add_markers_on_keypress else 1.0
         self.add_markers_on_keypress = (state == Qt.Checked)
+        self.playback_speed = 0.8 if self.add_markers_on_keypress else 1.0
         if self.add_markers_on_keypress:
             self.clear_markers()
             self.next_marker_index = 0
@@ -463,9 +463,11 @@ class WaveformViewer(QMainWindow):
     def update_playback_and_ui(self):
         current_ms = self.playback_position / self.sample_rate * 1000
         # Update time label
-        minutes = int(current_ms / 60000)
-        seconds = int((current_ms % 60000) / 1000)
-        self.time_label.setText(f"{minutes:02d}:{seconds:02d}")
+        total_seconds = current_ms / 1000
+        minutes = int(total_seconds // 60)
+        seconds = int(total_seconds % 60)
+        milliseconds = int((current_ms % 1000))
+        self.time_label.setText(f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}")
 
         # Update playhead line
         if self.playhead_line:
@@ -474,14 +476,36 @@ class WaveformViewer(QMainWindow):
             self.playhead_line = Line2D([current_ms, current_ms], [self.y_min, self.y_max], color='red')
             self.ax.add_line(self.playhead_line)
 
-        # --- Find first marker left of playhead ---
+        # --- Find the word to display ---
+        word_to_display = ""
+        words = self.transcription.toPlainText().strip().split()
+        
+        # Find the marker just before the current playback position
         left_markers = [m for m in self.markers if m.x <= current_ms]
+        
         if left_markers:
-            nearest = max(left_markers, key=lambda m: m.x)  # closest marker on left
-            word = nearest.word
-            bidi_word = persian_text(word)
+            nearest_marker = max(left_markers, key=lambda m: m.x)
+            
+            # Use the marker's index to find the corresponding word
+            # in the transcription list.
+            marker_index = nearest_marker.index - 1 # Marker index is 1-based, list is 0-based
+            
+            if self.add_markers_on_keypress:
+                # If checkbox is enabled, show the next word
+                next_word_index = marker_index + 1
+                if next_word_index < len(words):
+                    word_to_display = words[next_word_index]
+            else:
+                # Default behavior: show the current word
+                word_to_display = nearest_marker.word
+        else:
+            # If no markers have been passed yet, show the first word
+            if words and self.add_markers_on_keypress:
+                word_to_display = words[0]
 
-            # Show word in center of waveform
+        # Update the word label on the canvas
+        if word_to_display:
+            bidi_word = persian_text(word_to_display)
             if self.current_word_label is None:
                 self.current_word_label = self.ax.text(
                     0.5, 0.9, bidi_word, transform=self.ax.transAxes,
@@ -492,9 +516,9 @@ class WaveformViewer(QMainWindow):
             else:
                 self.current_word_label.set_text(bidi_word)
         else:
-            # If no marker yet, clear the text
             if self.current_word_label:
                 self.current_word_label.set_text("")
+                
         self.canvas.draw_idle()
 
     def update_playback_ui(self):
